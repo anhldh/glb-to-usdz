@@ -1,0 +1,44 @@
+# 1. Môi trường ảo (Virtual Environments)
+venv/
+env/
+.venv/
+
+# 2. File cấu hình & Bảo mật (Secrets/Config)
+.env
+.env.*
+*.pem
+config.ini
+
+# 3. Cache & Rác của Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 4. File model 3D 
+*.glb
+*.gltf
+*.usdz
+*.blend
+*.blend1
+/uploads/
+/temp/
+/tmp/
+
+# 5. Hệ điều hành (OS generated files)
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 6. IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
