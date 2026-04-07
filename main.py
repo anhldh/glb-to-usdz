@@ -1,5 +1,7 @@
 import bpy
 import os
+import sys
+import io
 import uuid
 import asyncio
 import urllib.request
@@ -8,6 +10,7 @@ from botocore.client import Config
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+import subprocess
 
 # Import 
 from config import settings
@@ -35,12 +38,32 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 class ConvertUrlRequest(BaseModel):
     url: str
 
-# convert
+SCRIPTS_DIR = os.path.join(os.path.dirname(__file__), "scripts")
+
+def preprocess_glb(input_path: str, output_path: str):
+    """Chuyển WebP textures sang JPG/PNG bằng gltf-transform"""
+    result = subprocess.run(
+        ["node", os.path.join(SCRIPTS_DIR, "convertGlb.mjs"), input_path, output_path],
+        capture_output=True, text=True, timeout=120
+    )
+    if result.returncode != 0:
+        raise Exception(f"Preprocess GLB failed: {result.stderr}")
+    # print(result.stdout)
+
 def convert_glb_to_usdz_sync(input_path: str, output_path: str):
-    """Hàm xử lý Blender """
+    preprocessed_path = input_path.replace(".glb", "_processed.glb")
+    
+    preprocess_glb(input_path, preprocessed_path)
+
+    # Suppress Blender logs
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    sys.stdout = io.StringIO()
+    sys.stderr = io.StringIO()
+
     bpy.ops.wm.read_factory_settings(use_empty=True)
     try:
-        bpy.ops.import_scene.gltf(filepath=input_path)
+        bpy.ops.import_scene.gltf(filepath=preprocessed_path)
     except Exception as e:
         raise Exception(f"Lỗi đọc file GLB: {str(e)}")
 
@@ -55,6 +78,11 @@ def convert_glb_to_usdz_sync(input_path: str, output_path: str):
         )
     except Exception as e:
         raise Exception(f"Lỗi xuất file USDZ: {str(e)}")
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        if os.path.exists(preprocessed_path):
+            os.remove(preprocessed_path)
 
 def upload_to_minio_sync(file_path: str, object_name: str) -> str:
     """Hàm upload file lên MinIO và trả về Public URL"""
@@ -185,5 +213,41 @@ async def convert_from_minio(request: ConvertFromMinioRequest, background_tasks:
         }
 
     except Exception as e:
+        cleanup_files([input_path, output_path])
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/convert-local-direct", summary="Convert GLB sang USDZ và tải về trực tiếp")
+async def convert_model_local_direct(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.lower().endswith('.glb'):
+        raise HTTPException(status_code=400, detail="Chỉ chấp nhận file định dạng .glb")
+
+    job_id = str(uuid.uuid4())
+    input_path = os.path.join(TEMP_DIR, f"{job_id}.glb")
+    output_path = os.path.join(TEMP_DIR, f"{job_id}.usdz")
+
+    try:
+        # 1. Lưu file GLB người dùng upload vào thư mục tạm
+        with open(input_path, "wb") as buffer:
+            buffer.write(await file.read())
+
+        # 2. Chạy hàm convert qua Blender
+        convert_glb_to_usdz_sync(input_path, output_path)
+
+        # Lấy tên file gốc (bỏ đuôi .glb) để đặt tên cho file tải về
+        original_filename = os.path.splitext(file.filename)[0]
+        download_filename = f"{original_filename}.usdz"
+
+        # 3. Lên lịch dọn rác cả 2 file (FastAPI sẽ chạy cái này SAU KHI trả file về)
+        background_tasks.add_task(cleanup_files, [input_path, output_path])
+
+        # 4. Trả file trực tiếp về cho client
+        return FileResponse(
+            path=output_path, 
+            filename=download_filename, 
+            media_type='model/vnd.usdz+zip'
+        )
+
+    except Exception as e:
+        # Nếu có lỗi giữa chừng thì dọn rác ngay lập tức
         cleanup_files([input_path, output_path])
         raise HTTPException(status_code=500, detail=str(e))

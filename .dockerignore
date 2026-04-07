@@ -7,3 +7,5 @@ storage/
 *.glb
 *.GLB
 *.usdz
+scripts/node_modules
+node_modules
