@@ -1,11 +1,11 @@
 # Stage 1: Install Node dependencies
-FROM --platform=linux/amd64 node:22-slim AS node-deps
+FROM node:22-slim AS node-deps
 WORKDIR /scripts
 COPY scripts/package.json scripts/package-lock.json ./
 RUN npm install
 
 # Stage 2: Main app
-FROM --platform=linux/amd64 python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm
 
 WORKDIR /app
 
